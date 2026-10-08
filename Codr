@@ -1,16 +1,20 @@
-স্কিন সট যেন এই ভাবে নেওয়া হয় এক সাথে ৮ টা গ্রিড লাইনে মানে এক ল্যান্ডস্কোপে ৪/৪
-করে ৮ টা স্কিন সট থাকবে অটো ফাইল এড করার জন্য আমাকে যেন কোন ক্যাপসন লিখতে না হয়
-মানে ফাইল নাম
-এই ভাবে লিখে দিবা নিউ ভাইরাল সেক্স ভিডিও 01 মাল আউট করার সেক্স ভিডিও 02 শব্দ
-শুনলেই হাত মারতে চাইবে 03 এই ভাবে রেন্ডম লিখে দিবা বাংলা ও ইংরেজিতে
-নাম্বার গুলা হচ্ছে ভিডিও এর সিরিয়াল নাম্বার
-বাকি সম্পুর্ন কোড যেন আগের মতোই থাকে এছাড়াও আমার বটে /cmd লিখলে যেন সকল কমান্ড
-লিস্ট চলে আসে কোন কমান্ড এর কি কাজ সেটাও যেন লেখা থাকে উদাহরণ সহ এছাড়াও বট ২
-বার করে মেসেজ দেয় ও ফাইল দেয় এটা ঠিক করো
+কোই এখিনো এড দেকে ব্যাক দিলে টাইমার চলতেই থাকে রি এড নামে কোন অপসই আসে না আর যত
+গুলা ভিডিও এড বা কয়েন দিয়ে আনলক করা হয় সে সব গুলাতে টাইমার উঠে না রেগুলার হোক
+বা প্রিমিয়াম এ জন্যি বার বার বলয়াম এক বিন্দু পরিমান কোড যেন বাদ না থাকে
 
-
-import os, sys, asyncio, threading, random, string, time, requests, json, base64
+import os, sys, asyncio, threading, random, string, time, requests, json, base64, socket
 from datetime import datetime, timedelta
+
+# ==========================================
+# 🛑 ANTI-DUPLICATE LOCK (ডাবল মেসেজ ফিক্স)
+# ==========================================
+# বট যেন ব্যাকগ্রাউন্ডে ভুল করে ২ বার রান হয়ে ডাবল মেসেজ না দেয়, তাই এই লক।
+try:
+    instance_lock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    instance_lock.bind(("127.0.0.1", 9876))
+except socket.error:
+    print("⚠️ বট আগে থেকেই রান হচ্ছে! ডাবল মেসেজ বন্ধ করতে নতুন প্রসেস বাতিল করা হলো।")
+    sys.exit(1)
 
 # ==========================================
 # 🛑 PYROGRAM PYTHON 3.14 FIX 🛑
@@ -25,6 +29,28 @@ from flask import Flask, render_template_string, jsonify, request
 from motor.motor_asyncio import AsyncIOMotorClient 
 from pymongo import MongoClient 
 from bson.objectid import ObjectId
+
+# ==========================================
+# 🛑 Pyrogram Double Message Filter 🛑
+# ==========================================
+processed_msgs = set()
+def is_unique_func(_, __, m):
+    if not hasattr(m, "id"): return True
+    if m.id in processed_msgs: return False
+    processed_msgs.add(m.id)
+    if len(processed_msgs) > 10000: processed_msgs.clear()
+    return True
+unique_msg = filters.create(is_unique_func)
+
+processed_cbs = set()
+def is_unique_cb(_, __, q):
+    if not hasattr(q, "id"): return True
+    if q.id in processed_cbs: return False
+    processed_cbs.add(q.id)
+    if len(processed_cbs) > 10000: processed_cbs.clear()
+    return True
+unique_cb = filters.create(is_unique_cb)
+
 
 # ==========================================
 # 1. CONFIGURATION
@@ -51,18 +77,19 @@ web = Flask(__name__)
 admin_steps = {}
 
 db_client, db = None, None 
-users_col, files_col, cats_col = None, None, None
+users_col, files_col, cats_col, tasks_col = None, None, None, None
 pkgs_col, links_col, config_col, channels_col, coupons_col, mongos_col = None, None, None, None, None, None 
 sync_db = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)["ShilaCallApp"]
 
 async def get_db(): 
-    global db_client, db, users_col, files_col, cats_col, pkgs_col, links_col, config_col, channels_col, coupons_col, mongos_col
+    global db_client, db, users_col, files_col, cats_col, pkgs_col, links_col, config_col, channels_col, coupons_col, mongos_col, tasks_col
     if db_client is None:
         db_client = AsyncIOMotorClient(MONGO_URI) 
         db = db_client["ShilaCallApp"]
         users_col, files_col, cats_col = db["users"], db["files"], db["categories"]
         pkgs_col, links_col, config_col = db["packages"], db["ad_links"], db["config"]
         channels_col, coupons_col, mongos_col = db["channels"], db["coupons"], db["mongos"] 
+        tasks_col = db["custom_tasks"]
     return db
 
 async def get_config(): 
@@ -70,7 +97,7 @@ async def get_config():
     conf = await config_col.find_one({"_id": "settings"}) 
     if not conf: 
         conf = { "_id": "settings", "ref_coin": 10, "ref_on": True, "auto_del_time": 0, "autodel_text": "⏳ ফাইলটি নির্দিষ্ট সময় পর অটো ডিলিট হয়ে যাবে। / File will be auto-deleted after some time.", "frotect": False, "ads_on": True, "direk_wait": [5], "prem_vid_wait": 10, "prstep": 1, "regstep": 1, "start_logo": None, "start_text": "", "payment_admin": DEFAULT_ADMIN_USERNAME, "autovid_msg_id": None, "autovid_chat_id": None, "autovid_time_min": 0, "autopost_time_hr": 0, "autopost_idx": 0, "site_name": "Glow Top", 
-                 "premium_vid_coin": 50, "vid_relock_min": 1440, "spin_coin_min": 10, "spin_coin_max": 50, "task_coin": 20 } 
+                 "premium_vid_coin": 50, "vid_relock_min": 1440, "spin_coin_min": 10, "spin_coin_max": 50, "task_coin": 20, "spin_limit": 5, "task_limit": 5 } 
         await config_col.insert_one(conf) 
     return conf
 
@@ -151,7 +178,7 @@ async def background_tasks():
             config = await get_config() 
             av_min = config.get("autovid_time_min", 0) 
             if av_min > 0 and config.get("autovid_msg_id") and (now - last_autovid) >= (av_min * 60): 
-                last_autovid = time.time() # Moved up to prevent spam loop on error
+                last_autovid = time.time() 
                 users = await users_col.find().to_list(None) 
                 from_chat = config.get("autovid_chat_id", ADMIN_ID)
                 for u in users: 
@@ -166,10 +193,8 @@ async def background_tasks():
 
             ap_hr = config.get("autopost_time_hr", 0)
             if ap_hr > 0 and (now - last_autopost) >= (ap_hr * 3600):
-                last_autopost = time.time() # Moved up to prevent spam loop on error
+                last_autopost = time.time() 
                 idx = config.get("autopost_idx", 0)
-                
-                # Fetching files from all DBs for auto-post
                 all_files = []
                 for d in await get_extra_dbs_async():
                     all_files.extend(await d["files"].find().sort("_id", 1).to_list(None))
@@ -190,11 +215,71 @@ async def background_tasks():
 # ==========================================
 # 4. BOT COMMANDS
 # ==========================================
-@app.on_message(filters.command("myid")) 
+@app.on_message(filters.command("myid") & unique_msg) 
 async def cmd_myid(c, m): 
     await m.reply(f"✅ বট একদম ঠিকভাবে কাজ করছে! / Bot is working perfectly!\n🆔 আপনার আইডি / Your ID: {m.from_user.id}")
 
-@app.on_message(filters.command("stats") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("cmd") & filters.user(ADMIN_ID) & unique_msg)
+async def cmd_list(c, m):
+    text = """
+    🛠 **সকল কমান্ড লিস্ট / All Commands List:**
+
+🔸 **Basic Commands:**
+`/myid` - আইডি দেখতে (Check ID)
+`/stats` - ইউজারের সংখ্যা ও স্ট্যাটিস্টিকস
+`/name <Name>` - ওয়েবসাইটের নাম পরিবর্তন (Change Website Name)
+
+🔸 **File Management:**
+`/addfile` - ম্যানুয়ালি ফাইল যোগ করুন (Step-by-step)
+`/auto` - ভিডিওতে রিপ্লাই করে অটো ফাইল + 4x2 (৮ পিক) থাম্বনেইল গ্রিড তৈরি ও অটো ক্যাপশন সেট করতে।
+`/delfile <file_id>` - ফাইল ডিলিট করতে
+`/delall` - সকল ডাটাবেসের সব ফাইল ডিলিট করতে
+
+🔸 **Tasks & Spin limits:**
+`/spinlimit <Num>` - ইউজারের ডেইলি স্পিন লিমিট (ex: /spinlimit 5)
+`/tasklimit <Num>` - ইউজারের ডেইলি ডিফল্ট টাস্ক লিমিট
+`/addtask <Title> | <Link> | <Coin>` - নতুন কাস্টম আনলিমিটেড টাস্ক অ্যাড
+`/deltask` - কাস্টম টাস্ক ডিলিট করতে
+
+🔸 **Database (MongoDB) Manager:**
+`/mongo <uri>` - নতুন ডাটাবেস যোগ করতে
+`/delmongo` - এক্সট্রা ডাটাবেস রিমুভ করতে
+`/mongostats` - ডাটাবেস স্টোরেজ চেক করতে
+
+🔸 **Coins & Pricing:**
+`/setpremcoin <Coin>` - প্রিমিয়াম ভিডিওর দাম নির্ধারণ (ex: /setpremcoin 50)
+`/spincoin <Min-Max>` - স্পিন কয়েনের রেঞ্জ (ex: /spincoin 10-50)
+`/taskcoin <Coin>` - টাস্ক কমপ্লিট করার কয়েন (ex: /taskcoin 20)
+`/relocktime <Min>` - ভিডিও কতক্ষণ পর আবার লক হবে (ex: /relocktime 1440)
+`/delrelocktime` - ভিডিও আনলক টাইমার ডিলিট করতে (কখনো লক হবে না)
+`/lockall` - সকল ইউজারের আনলক করা ভিডিও রিস্টার্ট/লক করতে।
+
+🔸 **Links & Ads:**
+`/addlink <link>` - ডাইরেক্ট অ্যাড লিংক যোগ করতে
+`/delink` - অ্যাড লিংক রিমুভ করতে
+`/prstep <step>` - প্রিমিয়াম অ্যাড স্টেপ সেট করতে (ex: /prstep 2)
+`/regstep <step>` - রেগুলার অ্যাড স্টেপ সেট করতে (ex: /regstep 1)
+
+🔸 **Channels & Broadcast:**
+`/addcnl <Name> <Link>` - ইনলাইন চ্যানেল লিংক অ্যাড করতে
+`/vercnl <ChatID> <Link>` - Must Join (Force Sub) চ্যানেল অ্যাড করতে
+`/brodcast` - সকল ইউজারকে মেসেজ পাঠাতে (কোনো মেসেজে রিপ্লাই করে)
+`/cnlbdcst <ChatID>` - নির্দিষ্ট গ্রুপ/চ্যানেলে মেসেজ পাঠাতে (রিপ্লাই করে)
+
+🔸 **Coupons & Packages:**
+`/allred <Limit> <Min-Max>` - অটো রেন্ডম কুপন তৈরি করতে
+`/addcred <Coins> = <Amt> <Unit>` - কয়েন প্যাকেজ তৈরি (ex: /addcred 500 = 7 d)
+`/bdt <Price> <Days>` - বিকাশ প্যাকেজ তৈরি
+`/usd <Price> <Days>` - USD প্যাকেজ তৈরি
+
+🔸 **Auto Delete & Others:**
+`/autodel <sec>` - ভিডিও অটো ডিলিট টাইম সেট করতে (ex: /autodel 60)
+`/frotect <on/off>` - মেসেজ ফরওয়ার্ড/সেভ অফ করতে (ex: /frotect on)
+`/addadmin <username>` - পেমেন্ট অ্যাডমিন সেট করতে
+    """
+    await m.reply(text)
+
+@app.on_message(filters.command("stats") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_stats(c, m): 
     await get_db() 
     t_u = await users_col.count_documents({}) 
@@ -206,7 +291,7 @@ async def cmd_stats(c, m):
     
     await m.reply(f"📊 Statistics:\n\n👥 Users: {t_u}\n🎬 Total Files: {t_f}\n💎 Premium: {p_u}\n👤 Regular: {t_u - p_u}\n🗄 Attached MongoDBs: {len(dbs)}")
 
-@app.on_message(filters.command("name") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("name") & filters.user(ADMIN_ID) & unique_msg)
 async def cmd_name(c, m):
     new_name = m.text.replace("/name", "").strip()
     if not new_name: return await m.reply("❌ সঠিক নিয়ম: `/name <Site_Name>`\nউদাহরণ: `/name MySite`")
@@ -214,7 +299,7 @@ async def cmd_name(c, m):
     await config_col.update_one({"_id": "settings"}, {"$set": {"site_name": new_name}})
     await m.reply(f"✅ সাইটের নাম পরিবর্তন করা হয়েছে / Site name changed to: {new_name}")
 
-@app.on_message(filters.command("start") & filters.private) 
+@app.on_message(filters.command("start") & filters.private & unique_msg) 
 async def start_cmd(client, message): 
     await get_db() 
     uid = message.from_user.id 
@@ -238,7 +323,12 @@ async def start_cmd(client, message):
 
     user = await users_col.find_one({"_id": uid})
     if not user:
-        await users_col.insert_one({"_id": uid, "name": message.from_user.first_name, "balance": 0, "pending_file": None, "premium_until": None, "history": [], "unlocked_files": {}})
+        await users_col.insert_one({
+            "_id": uid, "name": message.from_user.first_name, 
+            "balance": 0, "pending_file": None, "premium_until": None, 
+            "history": [], "unlocked_files": {}, 
+            "spin_count": 0, "task_count": 0, "last_activity_date": None
+        })
         if ref_by and ref_by != uid:
             if config.get("ref_on", True):
                 await users_col.update_one({"_id": ref_by}, {"$inc": {"balance": config.get("ref_coin", 10)}})
@@ -278,10 +368,17 @@ async def start_cmd(client, message):
             await target_db["files"].update_one({"_id": f_id}, {"$inc": {"views": 1}})
             msg = await message.reply("⏳ আপনার ফাইল পাঠানো হচ্ছে... / Sending your file...")
             try:
-                sent_msg = await client.send_cached_media(chat_id=uid, file_id=file_data["file_id"], caption=f"🎬 **{file_data['title']}**", protect_content=config.get("frotect", False))
+                # 🛑 অটোলিড টাইমার টেক্সট ক্যাপশনে এড করা হলো
+                del_time = config.get("auto_del_time", 0)
+                caption = f"🎬 **{file_data['title']}**"
+                if del_time > 0:
+                    mins, secs = divmod(del_time, 60)
+                    time_str = f"{mins} মিনিট {secs} সেকেন্ড" if mins > 0 else f"{secs} সেকেন্ড"
+                    caption += f"\n\n⏳ **ভিডিওটি {time_str} পর অটো ডিলিট হয়ে যাবে!**"
+
+                sent_msg = await client.send_cached_media(chat_id=uid, file_id=file_data["file_id"], caption=caption, protect_content=config.get("frotect", False))
                 await msg.delete()
                 
-                del_time = config.get("auto_del_time", 0)
                 if del_time > 0:
                     warn = await client.send_message(uid, f"⚠️ {config.get('autodel_text')}")
                     asyncio.create_task(delete_msg_later(client, uid, sent_msg.id, del_time))
@@ -308,12 +405,15 @@ async def start_cmd(client, message):
         except: await message.reply(txt, reply_markup=InlineKeyboardMarkup(btns))
     else: await message.reply(txt, reply_markup=InlineKeyboardMarkup(btns))
 
-@app.on_callback_query(filters.regex("check_join")) 
+@app.on_callback_query(filters.regex("check_join") & unique_cb) 
 async def check_join_cb(c, q): 
     await get_db() 
     for ch in await channels_col.find({"type": "must_join"}).to_list(100): 
         try: await c.get_chat_member(ch["chat_id"], q.from_user.id) 
         except: return await q.answer("❌ আপনি এখনো সব চ্যানেলে জয়েন করেননি! / You haven't joined all channels yet!", show_alert=True) 
+    
+    try: await q.answer()
+    except: pass
     await q.message.delete() 
     class FakeMsg: 
         def __init__(self, u): self.from_user = u; self.text = "/start" 
@@ -323,7 +423,7 @@ async def check_join_cb(c, q):
 # ==========================================
 # 5. ADMIN FILE UPLOAD & MULTI-MONGO
 # ==========================================
-@app.on_message(filters.command("addfile") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addfile") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addfile(c, m): 
     admin_steps[m.from_user.id] = {"step": "name"} 
     await m.reply("১. ফাইলের নাম/টাইটেল দিন: \n(1. Enter File Name/Title:)")
@@ -331,13 +431,13 @@ async def cmd_addfile(c, m):
 def is_in_step(step): 
     return filters.create(lambda _, __, m: admin_steps.get(m.from_user.id, {}).get("step") == step)
 
-@app.on_message(filters.text & filters.user(ADMIN_ID) & filters.private & is_in_step("name") & ~filters.command(["start", "myid"])) 
+@app.on_message(filters.text & filters.user(ADMIN_ID) & filters.private & is_in_step("name") & ~filters.command(["start", "myid", "cmd"]) & unique_msg) 
 async def handle_admin_name(c, m): 
     admin_steps[m.from_user.id]["title"] = m.text 
     admin_steps[m.from_user.id]["step"] = "thumb" 
     await m.reply("২. এবার ফাইলের ছবি বা লোগো দিন (Photo বা Document আকারে সেন্ড করুন):\n(2. Now send File Thumbnail/Photo/Document:)")
 
-@app.on_message((filters.photo | filters.document) & filters.user(ADMIN_ID) & filters.private & is_in_step("thumb")) 
+@app.on_message((filters.photo | filters.document) & filters.user(ADMIN_ID) & filters.private & is_in_step("thumb") & unique_msg) 
 async def handle_admin_photo(c, m): 
     msg = await m.reply("⏳ ছবি ডাটাবেসে সেভ করা হচ্ছে... / Saving image to Database...") 
     path = await m.download() 
@@ -357,13 +457,13 @@ async def handle_admin_photo(c, m):
     btns = [[InlineKeyboardButton("💎 Premium Video", callback_data="ftype_prem")], [InlineKeyboardButton("👤 Regular Video", callback_data="ftype_reg")]]
     await msg.edit_text("ভিডিওটি কি প্রিমিয়াম নাকি রেগুলার? / Is it Premium or Regular?", reply_markup=InlineKeyboardMarkup(btns))
 
-@app.on_callback_query(filters.regex(r"^ftype_") & filters.user(ADMIN_ID)) 
+@app.on_callback_query(filters.regex(r"^ftype_") & filters.user(ADMIN_ID) & unique_cb) 
 async def filetype_cb(c, q): 
     admin_steps[q.from_user.id]["is_premium"] = (q.data == "ftype_prem") 
     admin_steps[q.from_user.id]["step"] = "file" 
     await q.message.edit_text("✅ ৩. এবার মূল ফাইল (Video/Document) দিন:\n(3. Now send the main Video/File:)")
 
-@app.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMIN_ID) & filters.private & is_in_step("file")) 
+@app.on_message((filters.video | filters.document | filters.audio) & filters.user(ADMIN_ID) & filters.private & is_in_step("file") & unique_msg) 
 async def handle_admin_file(c, m): 
     msg = await m.reply("⏳ ফাইল সেভ করা হচ্ছে... / Saving file...") 
     short_id = ''.join(random.choices(string.ascii_letters + string.digits, k=8)) 
@@ -373,7 +473,6 @@ async def handle_admin_file(c, m):
     target_db = dbs[0]
     min_size = float('inf')
     
-    # Auto-Distribution: Find DB with the most free storage
     for d in dbs:
         try:
             st = await d.command("dbstats")
@@ -388,26 +487,53 @@ async def handle_admin_file(c, m):
     db_name = "Main DB" if target_db == dbs[0] else "Extra DB"
     await msg.edit_text(f"✅ ফাইল সফলভাবে অ্যাড হয়েছে! / File Added Successfully!\nID: `{short_id}`\n🗄 Saved in: {db_name}")
 
-# --- NEW AUTO UPLOAD SYSTEM ---
-@app.on_message(filters.command("auto") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("auto") & filters.user(ADMIN_ID) & unique_msg)
 async def cmd_auto_upload(c, m):
     if not m.reply_to_message or not (m.reply_to_message.video or m.reply_to_message.document):
-        return await m.reply("❌ কোনো ভিডিও বা ডকুমেন্টে রিপ্লাই করে `/auto <Title>` দিন।\n(Reply to a video with /auto Title)")
+        return await m.reply("❌ কোনো ভিডিও বা ডকুমেন্টে রিপ্লাই করে `/auto` দিন।\n(Reply to a video with /auto)")
     
-    title = m.text.replace("/auto", "").strip() or "Auto Uploaded Video"
-    msg = await m.reply("⏳ অটো প্রসেস করা হচ্ছে... / Processing auto upload...")
+    title = m.text.replace("/auto", "").strip()
+    
+    if not title:
+        total_files = 0
+        dbs = await get_extra_dbs_async()
+        for d in dbs: 
+            total_files += await d["files"].count_documents({})
+            
+        serial_num = f"{total_files + 1:03d}"
+        random_titles = [
+            f"নিউ ভাইরাল সেক্স ভিডিও {serial_num} / New Viral Sex Video {serial_num}",
+            f"মাল আউট করার সেক্স ভিডিও {serial_num} / Sperm Release Sex Video {serial_num}",
+            f"শব্দ শুনলেই হাত মারতে চাইবে {serial_num} / You will masturbate hearing the sound {serial_num}",
+            f"অসাধারণ সেক্স ভিডিও {serial_num} / Awesome Sex Video {serial_num}",
+            f"গোপন ক্যামেরায় ধারণ করা ভিডিও {serial_num} / Hidden Camera Video {serial_num}"
+        ]
+        title = random.choice(random_titles)
+
+    msg = await m.reply(f"⏳ অটো প্রসেস ও স্ক্রিনশট গ্রিড তৈরি করা হচ্ছে (এতে কিছুক্ষণ সময় লাগতে পারে)...\n\n**অটো টাইটেল:** {title}")
+    
     thumb_url = "https://placehold.co/600x400/1c1c24/ff007f?text=Media"
-    
     media = m.reply_to_message.video or m.reply_to_message.document
-    if getattr(media, "thumbs", None):
-        try:
-            path = await c.download_media(media.thumbs[0].file_id)
-            with open(path, "rb") as image_file:
+    
+    try:
+        video_path = await c.download_media(media.file_id)
+        grid_path = f"{video_path}_grid.jpg"
+        
+        cmd_safe = f'ffmpeg -y -i "{video_path}" -vf "thumbnail=n=20,scale=320:-1,tile=4x2" -frames:v 1 -q:v 2 "{grid_path}"'
+        
+        process = await asyncio.create_subprocess_shell(cmd_safe, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+        await process.communicate()
+        
+        if os.path.exists(grid_path):
+            with open(grid_path, "rb") as image_file:
                 encoded = base64.b64encode(image_file.read()).decode('utf-8')
             thumb_url = f"data:image/jpeg;base64,{encoded}"
-            os.remove(path)
-        except Exception as e:
-            print("Auto Thumb Error:", e)
+            os.remove(grid_path)
+            
+        if os.path.exists(video_path):
+            os.remove(video_path)
+    except Exception as e:
+        print("Auto Grid Error:", e)
 
     admin_steps[m.from_user.id] = {
         "step": "auto_wait",
@@ -420,7 +546,7 @@ async def cmd_auto_upload(c, m):
             [InlineKeyboardButton("👤 Regular Video", callback_data="auto_reg")]]
     await msg.edit_text(f"✅ **নাম:** {title}\n\nভিডিওটি কি প্রিমিয়াম নাকি রেগুলার কোথায় অ্যাড হবে? / Where to add this video?", reply_markup=InlineKeyboardMarkup(btns))
 
-@app.on_callback_query(filters.regex(r"^auto_") & filters.user(ADMIN_ID))
+@app.on_callback_query(filters.regex(r"^auto_") & filters.user(ADMIN_ID) & unique_cb)
 async def auto_type_cb(c, q):
     step_data = admin_steps.get(q.from_user.id)
     if not step_data or step_data.get("step") != "auto_wait":
@@ -450,7 +576,7 @@ async def auto_type_cb(c, q):
     db_name = "Main DB" if target_db == dbs[0] else "Extra DB"
     await q.message.edit_text(f"✅ অটো আপলোড সফল! / Auto Upload Success!\nID: `{short_id}`\n🗄 Saved in: {db_name}")
 
-@app.on_message(filters.command("delfile") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delfile") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delfile(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/delfile <file_id>`\nউদাহরণ: `/delfile AbCd123`")
     f_id = m.text.split()[1]
@@ -463,13 +589,13 @@ async def cmd_delfile(c, m):
     if deleted: await m.reply("✅ ফাইল ডিলিট হয়েছে! / File Deleted!") 
     else: await m.reply("❌ ফাইল পাওয়া যায়নি! / File Not Found!")
 
-@app.on_message(filters.command("delall") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delall") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delall(c, m): 
     for d in await get_extra_dbs_async(): await d["files"].delete_many({})
     await m.reply("✅ সকল ফাইল ডিলিট করা হয়েছে! / All files deleted from all DBs!")
 
 # --- MONGODB MANAGER COMMANDS ---
-@app.on_message(filters.command("mongo") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("mongo") & filters.user(ADMIN_ID) & unique_msg)
 async def cmd_mongo(c, m):
     args = m.text.split()
     if len(args) < 2: return await m.reply("❌ সঠিক নিয়ম: `/mongo <mongodb_uri>`\nউদাহরণ: `/mongo mongodb+srv://...`")
@@ -484,7 +610,7 @@ async def cmd_mongo(c, m):
     except Exception as e:
         await msg.edit_text(f"❌ MongoDB কানেক্ট করতে ব্যর্থ হয়েছে!\nError: {e}")
 
-@app.on_message(filters.command("delmongo") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("delmongo") & filters.user(ADMIN_ID) & unique_msg)
 async def cmd_delmongo(c, m):
     await get_db()
     dbs = await mongos_col.find().to_list(None)
@@ -492,7 +618,7 @@ async def cmd_delmongo(c, m):
     btns = [[InlineKeyboardButton(f"❌ {db['uri'][:25]}...", callback_data=f"delmongo_{db['_id']}")] for db in dbs]
     await m.reply("ডিলিট করতে ক্লিক করুন / Click to delete:", reply_markup=InlineKeyboardMarkup(btns))
 
-@app.on_callback_query(filters.regex(r"^delmongo_") & filters.user(ADMIN_ID))
+@app.on_callback_query(filters.regex(r"^delmongo_") & filters.user(ADMIN_ID) & unique_cb)
 async def delmongo_cb(c, q):
     await get_db()
     db_id = q.data.split("_")[1]
@@ -505,7 +631,7 @@ async def delmongo_cb(c, q):
     else:
         await q.message.edit_text("❌ পাওয়া যায়নি! / Not found!")
 
-@app.on_message(filters.command("mongostats") & filters.user(ADMIN_ID))
+@app.on_message(filters.command("mongostats") & filters.user(ADMIN_ID) & unique_msg)
 async def cmd_mongostats(c, m):
     msg = await m.reply("⏳ তথ্য সংগ্রহ করা হচ্ছে... / Fetching stats...")
     dbs = await get_extra_dbs_async()
@@ -529,103 +655,147 @@ async def cmd_mongostats(c, m):
     await msg.edit_text(text)
 
 # ==========================================
-# 6. OTHER ADMIN COMMANDS (WITH NEW CONFIGS)
+# 6. OTHER ADMIN COMMANDS
 # ==========================================
-@app.on_message(filters.command("setpremcoin") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("lockall") & filters.user(ADMIN_ID) & unique_msg) 
+async def cmd_lockall(c, m): 
+    # 🛑 আনলক টাইমার রিসেট কমান্ড যুক্ত করা হলো 🛑
+    await get_db()
+    await users_col.update_many({}, {"$set": {"unlocked_files": {}}})
+    await m.reply("✅ সবার আনলক করা ভিডিওগুলো রিস্টার্ট/লক করা হয়েছে! / All unlocked videos have been reset/locked for everyone!")
+
+@app.on_message(filters.command("setpremcoin") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_setpremcoin(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/setpremcoin <Coin>`\nউদাহরণ: `/setpremcoin 50`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"premium_vid_coin": int(m.text.split()[1])}}); await m.reply("✅ Premium Video Coin Price Set!")
 
-@app.on_message(filters.command("relocktime") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("relocktime") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_relocktime(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/relocktime <Minutes>`\nউদাহরণ: `/relocktime 1440` (1440 min = 24 hrs)")
-    await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"vid_relock_min": int(m.text.split()[1])}}); await m.reply("✅ Video Relock Time Set!")
+    await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"vid_relock_min": int(m.text.split()[1])}}); await m.reply("✅ Video Relock Time Set! (টাইম আপডেট করার পর সবার ভিডিও আবার লক করতে /lockall কমান্ড ব্যবহার করতে পারেন)")
 
-@app.on_message(filters.command("spincoin") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delrelocktime") & filters.user(ADMIN_ID) & unique_msg) 
+async def cmd_delrelocktime(c, m): 
+    await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"vid_relock_min": 0}}); await m.reply("✅ Video Relock Time Deleted! (ভিডিও আর কখনো লক হবে না, আজীবন আনলক থাকবে)")
+
+@app.on_message(filters.command("spincoin") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_spincoin(c, m): 
     if len(m.text.split()) < 2 or "-" not in m.text: return await m.reply("❌ সঠিক নিয়ম: `/spincoin <Min-Max>`\nউদাহরণ: `/spincoin 10-50`")
     mn, mx = map(int, m.text.split()[1].split("-"))
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"spin_coin_min": mn, "spin_coin_max": mx}}); await m.reply("✅ Spin Coin Range Set!")
 
-@app.on_message(filters.command("taskcoin") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("taskcoin") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_taskcoin(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/taskcoin <Coin>`\nউদাহরণ: `/taskcoin 20`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"task_coin": int(m.text.split()[1])}}); await m.reply("✅ Task Coin Reward Set!")
 
-@app.on_message(filters.command("prstep") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("spinlimit") & filters.user(ADMIN_ID) & unique_msg)
+async def cmd_spinlimit(c, m):
+    if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/spinlimit <Num>`\nউদাহরণ: `/spinlimit 5`")
+    await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"spin_limit": int(m.text.split()[1])}}); await m.reply("✅ User Daily Spin Limit Set!")
+
+@app.on_message(filters.command("tasklimit") & filters.user(ADMIN_ID) & unique_msg)
+async def cmd_tasklimit(c, m):
+    if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/tasklimit <Num>`\nউদাহরণ: `/tasklimit 5`")
+    await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"task_limit": int(m.text.split()[1])}}); await m.reply("✅ User Daily Default Task Limit Set!")
+
+@app.on_message(filters.command("addtask") & filters.user(ADMIN_ID) & unique_msg)
+async def cmd_addtask(c, m):
+    try:
+        parts = m.text.replace("/addtask", "").strip().split("|")
+        title, link, coin = parts[0].strip(), parts[1].strip(), int(parts[2].strip())
+        await get_db()
+        await tasks_col.insert_one({"title": title, "link": link, "coin": coin})
+        await m.reply(f"✅ কাস্টম আনলিমিটেড টাস্ক অ্যাড হয়েছে!\nTitle: {title}\nCoin: {coin}")
+    except:
+        await m.reply("❌ সঠিক নিয়ম: `/addtask <Title> | <Link> | <Coins>`\nউদাহরণ: `/addtask Join Telegram | https://t.me/abc | 50`")
+
+@app.on_message(filters.command("deltask") & filters.user(ADMIN_ID) & unique_msg)
+async def cmd_deltask(c, m):
+    await get_db()
+    tsks = await tasks_col.find().to_list(100)
+    if not tsks: return await m.reply("❌ কোনো টাস্ক নেই!")
+    btns = [[InlineKeyboardButton(f"❌ {t['title']} ({t['coin']}C)", callback_data=f"deltask_{t['_id']}")] for t in tsks]
+    await m.reply("ডিলিট করতে ক্লিক করুন:", reply_markup=InlineKeyboardMarkup(btns))
+
+@app.on_callback_query(filters.regex(r"^deltask_") & filters.user(ADMIN_ID) & unique_cb)
+async def deltask_cb(c, q):
+    await get_db(); await tasks_col.delete_one({"_id": ObjectId(q.data.split("_")[1])}); await q.message.edit_text("✅ Task Deleted!")
+
+@app.on_message(filters.command("prstep") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_prstep(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/prstep <step>`\nউদাহরণ: `/prstep 2`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"prstep": int(m.text.split()[1])}}); await m.reply("✅ Premium Ad Steps Set!")
 
-@app.on_message(filters.command("regstep") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("regstep") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_regstep(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/regstep <step>`\nউদাহরণ: `/regstep 1`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"regstep": int(m.text.split()[1])}}); await m.reply("✅ Regular Ad Steps Set!")
 
-@app.on_message(filters.command("addadmin") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addadmin") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addadmin(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/addadmin <username>`\nউদাহরণ: `/addadmin Sudo_king`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"payment_admin": m.text.split()[1].replace("@", "")}}); await m.reply("✅ Payment Admin Set!")
 
-@app.on_message(filters.command("addlink") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addlink") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addlink(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/addlink <link>`\nউদাহরণ: `/addlink https://adlink.com/...`")
     await get_db(); await links_col.insert_one({"link": m.text.split()[1]}); await m.reply("✅ Ad Link Added!")
 
-@app.on_message(filters.command("delink") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delink") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_dellink(c, m): 
     await get_db() 
     btns = [[InlineKeyboardButton(f"❌ {l['link'][:20]}...", callback_data=f"dellink_{l['_id']}")] for l in await links_col.find().to_list(100)] 
     await m.reply("ডিলিট করতে ক্লিক করুন / Click to delete:", reply_markup=InlineKeyboardMarkup(btns) if btns else None)
 
-@app.on_callback_query(filters.regex(r"^dellink_") & filters.user(ADMIN_ID))
+@app.on_callback_query(filters.regex(r"^dellink_") & filters.user(ADMIN_ID) & unique_cb)
 async def dellink_cb(c, q): 
     await get_db(); await links_col.delete_one({"_id": ObjectId(q.data.split("_")[1])}); await q.message.edit_text("✅ Ad Link Deleted!")
 
-@app.on_message(filters.command("addcnl") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addcnl") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addcnl(c, m): 
     if len(m.text.split()) < 3: return await m.reply("❌ সঠিক নিয়ম: `/addcnl <Name> <Link>`\nউদাহরণ: `/addcnl MyChannel https://t.me/...`")
     await get_db(); p = m.text.split(maxsplit=2); await channels_col.insert_one({"type": "inline", "name": p[1], "link": p[2]}); await m.reply("✅ Inline Channel added!")
 
-@app.on_message(filters.command("delcnl") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delcnl") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delcnl(c, m): 
     await get_db() 
     btns = [[InlineKeyboardButton(f"❌ {ch['name']}", callback_data=f"delch_{ch['_id']}")] for ch in await channels_col.find({"type": "inline"}).to_list(100)] 
     await m.reply("ডিলিট করতে ক্লিক করুন / Click to delete:", reply_markup=InlineKeyboardMarkup(btns) if btns else None)
 
-@app.on_message(filters.command("vercnl") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("vercnl") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_vercnl(c, m): 
     if len(m.text.split()) < 3: return await m.reply("❌ সঠিক নিয়ম: `/vercnl <ChatID> <Link>`\nউদাহরণ: `/vercnl -10012345678 https://t.me/...`")
     await get_db(); p = m.text.split(); await channels_col.insert_one({"type": "must_join", "chat_id": int(p[1]), "link": p[2]}); await m.reply("✅ Must Join Channel Added!")
 
-@app.on_message(filters.command("delvrcnl") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delvrcnl") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delvrcnl(c, m): 
     await get_db() 
     btns = [[InlineKeyboardButton(f"❌ {ch['chat_id']}", callback_data=f"delch_{ch['_id']}")] for ch in await channels_col.find({"type": "must_join"}).to_list(100)] 
     await m.reply("ডিলিট করতে ক্লিক করুন / Click to delete:", reply_markup=InlineKeyboardMarkup(btns) if btns else None)
 
-@app.on_callback_query(filters.regex(r"^delch_") & filters.user(ADMIN_ID)) 
+@app.on_callback_query(filters.regex(r"^delch_") & filters.user(ADMIN_ID) & unique_cb) 
 async def delch_cb(c, q): 
     await get_db(); await channels_col.delete_one({"_id": ObjectId(q.data.split("_")[1])}); await q.message.edit_text("✅ Channel Deleted!")
 
-@app.on_message(filters.command("addtex") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addtex") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addtex(c, m): 
     tex = m.text.replace("/addtex", "").strip()
     if not tex: return await m.reply("❌ সঠিক নিয়ম: `/addtex <Text>`\nউদাহরণ: `/addtex স্বাগতম!`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"start_text": tex}}); await m.reply("✅ Start Text Set!")
 
-@app.on_message(filters.command("deltex") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("deltex") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_deltex(c, m): 
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"start_text": ""}}); await m.reply("✅ Start Text Deleted!")
 
-@app.on_message(filters.command("logo") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("logo") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_logo(c, m): 
     await get_db() 
     if m.reply_to_message and m.reply_to_message.photo: 
         await config_col.update_one({"_id": "settings"}, {"$set": {"start_logo": m.reply_to_message.photo.file_id}}); await m.reply("✅ Start Logo Set!")
     else: await m.reply("❌ কোনো ছবির সাথে রিপ্লাই করে `/logo` দিন।")
 
-@app.on_message(filters.command("autvid") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("autvid") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_autvid(c, m): 
     await get_db(); 
     if m.reply_to_message: 
@@ -633,72 +803,72 @@ async def cmd_autvid(c, m):
         await m.reply("✅ Auto Vid Msg Set!")
     else: await m.reply("❌ কোনো মেসেজ/ভিডিওতে রিপ্লাই করে `/autvid` দিন।")
 
-@app.on_message(filters.command("autvidti") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("autvidti") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_autvidti(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/autvidti <minutes>`\nউদাহরণ: `/autvidti 30`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"autovid_time_min": int(m.text.split()[1])}}); await m.reply("✅ Auto Vid Interval Set!")
 
-@app.on_message(filters.command("autpost") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("autpost") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_autpost(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/autpost <hours>`\nউদাহরণ: `/autpost 2`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"autopost_time_hr": int(m.text.split()[1])}}); await m.reply("✅ Auto Post Interval Set!")
 
-@app.on_message(filters.command("refbonous") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("refbonous") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_refbonous(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/refbonous <coin>`\nউদাহরণ: `/refbonous 20`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"ref_coin": int(m.text.split()[1]), "ref_on": True}}); await m.reply("✅ Ref Bonus Set!")
 
-@app.on_message(filters.command("refbonousoff") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("refbonousoff") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_refbonousoff(c, m): 
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"ref_on": False}}); await m.reply("✅ Ref Bonus OFF!")
 
-@app.on_message(filters.command("frotect") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("frotect") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_frotect(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/frotect <on/off>`\nউদাহরণ: `/frotect on`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"frotect": m.text.split()[1].lower() == "on"}}); await m.reply("✅ Protect Config Set!")
 
-@app.on_message(filters.command("autodel") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("autodel") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_autodel(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/autodel <seconds>`\nউদাহরণ: `/autodel 600`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"auto_del_time": int(m.text.split()[1])}}); await m.reply("✅ Auto Delete Set!")
 
-@app.on_message(filters.command("autex") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("autex") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_autex(c, m): 
     tex = m.text.replace("/autex", "").strip()
     if not tex: return await m.reply("❌ সঠিক নিয়ম: `/autex <Text>`\nউদাহরণ: `/autex নির্দিষ্ট সময় পর ডিলিট হবে।`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"autodel_text": tex}}); await m.reply("✅ Auto Delete Text Set!")
 
-@app.on_message(filters.command("usd") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("usd") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_usd(c, m): 
     if len(m.text.split()) < 3: return await m.reply("❌ সঠিক নিয়ম: `/usd <Price> <Days>`\nউদাহরণ: `/usd 5 30`")
     await get_db(); p=m.text.split(); await pkgs_col.insert_one({"type": "usd", "details": f"{p[1]} USD={p[2]} Days"}); await m.reply("✅ USD Package Added!")
 
-@app.on_message(filters.command("bdt") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("bdt") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_bdt(c, m): 
     if len(m.text.split()) < 3: return await m.reply("❌ সঠিক নিয়ম: `/bdt <Price> <Days>`\nউদাহরণ: `/bdt 100 30`")
     await get_db(); p=m.text.split(); await pkgs_col.insert_one({"type": "bkash", "details": f"{p[1]} BDT={p[2]} Days"}); await m.reply("✅ BDT Package Added!")
 
-@app.on_message(filters.command("addcred") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addcred") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addcred(c, m): 
     if len(m.text.split()) < 5: return await m.reply("❌ সঠিক নিয়ম: `/addcred <Coins> = <Amount> <Unit>`\nউদাহরণ: `/addcred 500 = 7 d`")
     await get_db(); p=m.text.split(); await pkgs_col.insert_one({"type": "coin", "coins": int(p[1]), "amount": int(p[3]), "unit": p[4], "details": f"{p[1]} Coins={p[3]} {p[4]}"}); await m.reply("✅ Coin Package Added!")
 
-@app.on_message(filters.command("delcred") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delcred") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delcred(c, m): 
     await get_db() 
     btns = [[InlineKeyboardButton(f"❌ {p['details']}", callback_data=f"delpkg_{p['_id']}")] for p in await pkgs_col.find({"type": "coin"}).to_list(100)] 
     await m.reply("ডিলিট করতে ক্লিক করুন / Click to delete:", reply_markup=InlineKeyboardMarkup(btns) if btns else None)
 
-@app.on_callback_query(filters.regex(r"^delpkg_") & filters.user(ADMIN_ID))
+@app.on_callback_query(filters.regex(r"^delpkg_") & filters.user(ADMIN_ID) & unique_cb)
 async def delpkg_cb(c, q): 
     await get_db(); await pkgs_col.delete_one({"_id": ObjectId(q.data.split("_")[1])}); await q.message.edit_text("✅ Package Deleted!")
 
-@app.on_message(filters.command("prparadd") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("prparadd") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_prparadd(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/prparadd <seconds>`\nউদাহরণ: `/prparadd 10`")
     await get_db(); await config_col.update_one({"_id": "settings"}, {"$set": {"prem_vid_wait": int(m.text.split()[1])}}); await m.reply("✅ Premium Vid Wait Time Set!")
 
-@app.on_message(filters.command("addrdiem") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("addrdiem") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_addrdiem(c, m): 
     if len(m.text.split()) < 4: return await m.reply("❌ সঠিক নিয়ম: `/addrdiem <UserID> <Amount> <Unit>`\nউদাহরণ: `/addrdiem 12345678 30 d`")
     await get_db() 
@@ -707,12 +877,12 @@ async def cmd_addrdiem(c, m):
     await users_col.update_one({"_id": u_id}, {"$set": {"premium_until": datetime.now() + timedelta(seconds=amt * secs)}}) 
     await m.reply(f"✅ User {u_id} made Premium!"); await c.send_message(u_id, f"🎉 You received {amt} {unit} Premium!")
 
-@app.on_message(filters.command("delpremium") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("delpremium") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_delpremium(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/delpremium <UserID>`\nউদাহরণ: `/delpremium 12345678`")
     await get_db(); await users_col.update_one({"_id": int(m.text.split()[1])}, {"$set": {"premium_until": None}}); await m.reply("✅ Premium Removed!")
 
-@app.on_message(filters.command("brodcast") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("brodcast") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_brodcast(c, m): 
     await get_db() 
     if not m.reply_to_message: return await m.reply("❌ Reply to a message / কোনো মেসেজে রিপ্লাই করে দিন।") 
@@ -722,13 +892,13 @@ async def cmd_brodcast(c, m):
         except: pass 
     await msg.edit_text(f"✅ Sent to {success} users.")
 
-@app.on_message(filters.command("cnlbdcst") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("cnlbdcst") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_cnlbdcst(c, m): 
     if len(m.text.split()) < 2: return await m.reply("❌ সঠিক নিয়ম: `/cnlbdcst <ChatID>` (রিপ্লাই করে)\nউদাহরণ: `/cnlbdcst -100123456`")
     if not m.reply_to_message: return await m.reply("❌ Reply to a message / কোনো মেসেজে রিপ্লাই করে দিন।") 
     await m.reply_to_message.copy(m.text.split()[1]); await m.reply("✅ Message Sent to Channel/Group!")
 
-@app.on_message(filters.command("allred") & filters.user(ADMIN_ID)) 
+@app.on_message(filters.command("allred") & filters.user(ADMIN_ID) & unique_msg) 
 async def cmd_allred(c, m): 
     if len(m.text.split()) < 3: return await m.reply("❌ সঠিক নিয়ম: `/allred <Limit> <Min-Max>`\nউদাহরণ: `/allred 100 10-50`")
     await get_db() 
@@ -754,7 +924,7 @@ def get_ad_api(user_id, file_id):
     if user and user.get("premium_until") and user["premium_until"] > datetime.now(): 
         return jsonify({"show_ad": False, "is_unlocked": True, "requires_coin": False})
 
-    # Check if previously unlocked (Ad or Coin) and time is not expired
+    # Check if previously unlocked
     unlocked_files = user.get("unlocked_files", {})
     if file_id in unlocked_files:
         try:
@@ -773,7 +943,8 @@ def get_ad_api(user_id, file_id):
             ad_link = random.choice(links)["link"]
             wait_time = random.choice(config.get("direk_wait", [5]))
             steps = config.get("regstep", 1)
-            return jsonify({"show_ad": True, "ad_link": ad_link, "wait_time": wait_time, "steps": steps, "requires_coin": False})
+            # 🛑 রেগুলার ভিডিওতেও coin_price পাঠানো হলো যেন পপ আপ দেখানো যায়
+            return jsonify({"show_ad": True, "ad_link": ad_link, "wait_time": wait_time, "steps": steps, "requires_coin": False, "coin_price": config.get("premium_vid_coin", 50)})
             
     return jsonify({"show_ad": False, "is_unlocked": True})
 
@@ -791,16 +962,42 @@ def unlock_file():
         sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": -cost}})
         
     relock_min = config.get("vid_relock_min", 1440)
-    expiry = (datetime.now() + timedelta(minutes=relock_min)).isoformat()
+    if relock_min > 0:
+        expiry = (datetime.now() + timedelta(minutes=relock_min)).isoformat()
+    else:
+        expiry = (datetime.now() + timedelta(days=36500)).isoformat() # 100 Years Forever
+
     sync_db["users"].update_one({"_id": uid}, {"$set": {f"unlocked_files.{f_id}": expiry}})
     return jsonify({"status": "success", "msg": "Unlocked!"})
 
-@web.route('/api/get_earn_ad')
-def get_earn_ad():
+@web.route('/api/earn_info/<int:uid>')
+def get_earn_info(uid):
     config = sync_db["config"].find_one({"_id": "settings"}) or {}
+    user = sync_db["users"].find_one({"_id": uid})
+    today = datetime.now().strftime("%Y-%m-%d")
+    
+    if user.get("last_activity_date") != today:
+        sync_db["users"].update_one({"_id": uid}, {"$set": {"last_activity_date": today, "spin_count": 0, "task_count": 0}})
+        user["spin_count"] = 0
+        user["task_count"] = 0
+
+    spin_lim = config.get("spin_limit", 5)
+    task_lim = config.get("task_limit", 5)
+    
+    c_tasks = list(sync_db["custom_tasks"].find())
+    for t in c_tasks: t["_id"] = str(t["_id"])
+    
+    return jsonify({
+        "spins_done": user.get("spin_count", 0), "spin_limit": spin_lim,
+        "tasks_done": user.get("task_count", 0), "task_limit": task_lim,
+        "custom_tasks": c_tasks
+    })
+
+@web.route('/api/get_earn_ad/<ad_type>')
+def get_earn_ad_dynamic(ad_type):
     links = list(sync_db["ad_links"].find())
     if not links: return jsonify({"ad_link": None})
-    return jsonify({"ad_link": random.choice(links)["link"], "wait_time": 15}) # 15s wait for earn ads
+    return jsonify({"ad_link": random.choice(links)["link"], "wait_time": 15})
 
 @web.route('/api/claim_earn', methods=['POST'])
 def claim_earn():
@@ -808,24 +1005,36 @@ def claim_earn():
     uid, task_type = data['uid'], data['type']
     config = sync_db["config"].find_one({"_id": "settings"}) or {}
     user = sync_db["users"].find_one({"_id": uid})
-    
     today = datetime.now().strftime("%Y-%m-%d")
     
+    if user.get("last_activity_date") != today:
+        sync_db["users"].update_one({"_id": uid}, {"$set": {"last_activity_date": today, "spin_count": 0, "task_count": 0}})
+        user["spin_count"] = 0; user["task_count"] = 0
+
     if task_type == "spin":
-        if user.get("last_spin_date") == today:
+        limit = config.get("spin_limit", 5)
+        if user.get("spin_count", 0) >= limit:
             return jsonify({"status": "error", "msg": "❌ আজকের স্পিন লিমিট শেষ! / Daily Spin Limit Reached!"})
         
         coin = random.randint(config.get("spin_coin_min", 10), config.get("spin_coin_max", 50))
-        sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": coin}, "$set": {"last_spin_date": today}})
+        sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": coin, "spin_count": 1}})
         return jsonify({"status": "success", "msg": f"🎉 আপনি স্পিন করে {coin} কয়েন পেয়েছেন!"})
         
     elif task_type == "task":
-        if user.get("last_task_date") == today:
+        limit = config.get("task_limit", 5)
+        if user.get("task_count", 0) >= limit:
             return jsonify({"status": "error", "msg": "❌ আজকের টাস্ক লিমিট শেষ! / Daily Task Limit Reached!"})
             
         coin = config.get("task_coin", 20)
-        sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": coin}, "$set": {"last_task_date": today}})
+        sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": coin, "task_count": 1}})
         return jsonify({"status": "success", "msg": f"🎉 টাস্ক কমপ্লিট করে {coin} কয়েন পেয়েছেন!"})
+
+    elif task_type.startswith("custom_"):
+        tid = task_type.split("_")[1]
+        task_data = sync_db["custom_tasks"].find_one({"_id": ObjectId(tid)})
+        if task_data:
+            sync_db["users"].update_one({"_id": uid}, {"$inc": {"balance": task_data["coin"]}})
+            return jsonify({"status": "success", "msg": f"🎉 টাস্ক করে {task_data['coin']} কয়েন পেয়েছেন!"})
         
     return jsonify({"status": "error", "msg": "Invalid Task"})
 
@@ -903,7 +1112,13 @@ def get_user(user_id):
             if sec or not res: res.append(f"{sec} সেকেন্ড/s")
             expiry_str = " ".join(res)
 
-    return jsonify({"balance": user.get("balance", 0) if user else 0, "is_premium": is_prem, "expiry": expiry_str, "history": user.get("history", []) if user else []})
+    return jsonify({
+        "balance": user.get("balance", 0) if user else 0, 
+        "is_premium": is_prem, 
+        "expiry": expiry_str, 
+        "history": user.get("history", []) if user else [],
+        "unlocked_files": user.get("unlocked_files", {}) if user else {}
+    })
 
 # ==========================================
 # 8. HTML UI & LOGIC 
@@ -979,13 +1194,14 @@ HTML_TEMPLATE = """
         .cmt-item { border-bottom: 1px solid rgba(255,255,255,0.05); padding:5px 0; font-size:13px; }
         .cmt-item:last-child { border:none; }
         
-        .earn-card { background: rgba(25,25,35,0.8); border: 1px solid rgba(0,212,255,0.3); padding:20px; border-radius:15px; text-align:center; margin-bottom:15px; }
+        .earn-card { background: rgba(25,25,35,0.8); border: 1px solid rgba(0,212,255,0.3); padding:20px; border-radius:15px; text-align:center; margin-bottom:15px; position:relative; }
+        .limit-badge { position: absolute; top:10px; right:10px; background: rgba(0,0,0,0.5); padding: 3px 8px; border-radius: 10px; font-size:11px; border: 1px solid rgba(255,255,255,0.2); }
     </style>
 </head>
 <body>
 
 <div class="header">
-    <div class="logo">{{ site_name }}<span class="prem-badge" id="prem-badge">VIP</span></div>
+    <div class="logo">{{ site_name }}<span class="prem-badge" id="prem-badge">Premium</span></div>
     <div style="display:flex; align-items:center;">
         <button class="lang-btn" onclick="toggleLanguage()" id="lang-btn">English</button>
         <div class="coin-pill">🏛 <span id="hdr-balance">0</span></div>
@@ -1000,18 +1216,41 @@ HTML_TEMPLATE = """
             <span class="lang-bn">এই ওয়েবসাইটের কনটেন্ট শুধুমাত্র <b style="color:#00d4ff;">১৮ বছর বা তার বেশি বয়সী</b> ব্যবহারকারীদের জন্য প্রযোজ্য।</span>
             <span class="lang-en">This website content is strictly for users who are <b style="color:#00d4ff;">18 years of age or older</b>.</span>
         </p>
-        <div class="alert-box"><span class="lang-bn">⚠️ আপনার বয়স ১৮+ না হলে সাইটটি ব্যবহার করবেন না।</span><span class="lang-en">⚠️ Do not enter if you are under 18.</span></div>
+        <div class="alert-box"><span class="lang-bn">⚠️ আপনার বয়স ১৮+ না হলে সাইটটি ব্যবহার করবেন খন।</span><span class="lang-en">⚠️ Do not enter if you are under 18.</span></div>
         <button class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black; margin-bottom:10px;" onclick="confirmAge()"><span class="lang-bn">✅ হ্যাঁ, আমার বয়স ১৮+ বছর</span><span class="lang-en">✅ Yes, I am 18+</span></button>
-        <button class="btn-main" style="background: transparent; border: 1px solid #555; color: #888;" onclick="tg.close()"><span class="lang-bn">❌ না, বের হয়ে যান</span><span class="lang-en">❌ No, Exit</span></button>
+        <button class="btn-main" style="background: transparent; border: 1px solid #555; color: #888;" onclick="window.close()"><span class="lang-bn">❌ না, বের হয়ে যান</span><span class="lang-en">❌ No, Exit</span></button>
+    </div>
+</div>
+
+<!-- 🛑 NEW REGULAR CHOICE MODAL -->
+<div id="regular-choice-modal" class="modal-overlay">
+    <div class="modal-box">
+        <button class="close-btn" onclick="document.getElementById('regular-choice-modal').style.display='none'">✖</button>
+        <div style="font-size: 40px; margin-bottom:10px;">🎬</div>
+        <h3 style="margin-top:0;">Unlock Video</h3>
+        <p style="color:#aaa; font-size:14px;"><span class="lang-bn">আপনি কিভাবে ভিডিওটি আনলক করতে চান?</span><span class="lang-en">How do you want to unlock?</span></p>
+        <button class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black; margin-top:10px;" onclick="document.getElementById('regular-choice-modal').style.display='none'; startAdProcess();">📺 Watch Ad (Free)</button>
+        <button class="btn-main" style="background: linear-gradient(90deg, #c72cff, #ff007f); margin-top:10px;" onclick="document.getElementById('regular-choice-modal').style.display='none'; unlockWithCoin();">💎 Use <span id="reg-coin-price"></span> Coins</button>
     </div>
 </div>
 
 <div id="ad-overlay" class="modal-overlay">
-    <div class="modal-box" style="background:transparent; border:none; box-shadow:none;">
-        <div style="background: rgba(255,255,255,0.1); padding: 5px 15px; border-radius: 20px; display:inline-block; margin-bottom: 15px; font-weight:bold;" id="step-info">Step 1 of 1</div>
-        <h1 id="timer-count" style="font-size:90px; color:#f02d73; margin:0;">5</h1>
-        <p style="font-size:16px; color:#aaa;"><span class="lang-bn">অ্যাড দেখার পর ফাইলটি পাবেন (ব্যাক দিলে টাইম রিফ্রেশ হবে)</span><span class="lang-en">You will get the file after ad</span></p>
-        <button id="get-file-btn" class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black; display:none;">Next Step</button>
+    <div class="modal-box" style="background: rgba(20,20,30,0.95); border: 2px solid #00d4ff; box-shadow: 0 0 20px rgba(0,212,255,0.4); border-radius: 20px;">
+        <h2 style="color: #00d4ff; margin-top: 0;">🚀 Ad Verification</h2>
+        <div style="background: rgba(0,0,0,0.4); padding: 10px; border-radius: 12px; margin-bottom: 15px; font-weight:bold; color: #fff; font-size: 15px; border: 1px solid rgba(255,255,255,0.1);" id="step-info">
+            Step 1 of 1
+        </div>
+        <div style="position: relative; width: 120px; height: 120px; margin: 0 auto 15px auto; border-radius: 50%; border: 4px solid rgba(255,255,255,0.1); display: flex; align-items: center; justify-content: center; background: radial-gradient(circle, rgba(255,0,127,0.2) 0%, transparent 70%);">
+            <h1 id="timer-count" style="font-size:50px; color:#f02d73; margin:0;">5</h1>
+            <span style="position: absolute; bottom: 15px; font-size: 11px; color: #aaa;">Seconds</span>
+        </div>
+        <p style="font-size:14px; color:#aaa; margin-bottom: 20px;">
+            <span class="lang-bn">ফাইলটি পেতে সম্পূর্ণ অ্যাডটি দেখুন। ব্যাক দিলে টাইম স্টপ হয়ে যাবে।</span>
+            <span class="lang-en">Watch the ad completely. Timer pauses if you go back.</span>
+        </p>
+        <button id="get-file-btn" class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black; display:none; font-weight: bold; font-size: 18px; padding: 12px;">Next Step</button>
+        <!-- 🛑 RE-AD BUTTON ADDED HERE -->
+        <button id="re-ad-btn" class="btn-main" style="background: linear-gradient(90deg, #ff0000, #ff7300); color:white; display:none; font-weight: bold; font-size: 18px; padding: 12px; margin-top: 10px;" onclick="resumeAd()">🔄 Re-Ad / আবার অ্যাড দেখুন</button>
     </div>
 </div>
 
@@ -1064,24 +1303,11 @@ HTML_TEMPLATE = """
 
 <div id="page-earn" class="page">
     <h2 style="margin-top:0;">🎯 <span class="lang-bn">কয়েন আয় করুন</span><span class="lang-en">Earn Coins</span></h2>
-    
-    <div class="earn-card">
-        <div style="font-size:40px;">🎰</div>
-        <h3>Daily Spin Bonus</h3>
-        <p style="font-size:12px; color:#aaa; margin-bottom:15px;">Watch a short ad to spin and win random coins!</p>
-        <button class="btn-main" style="background: linear-gradient(90deg, #ffb703, #ff6b6b);" onclick="startEarnAd('spin')">Spin & Earn</button>
-    </div>
-    
-    <div class="earn-card">
-        <div style="font-size:40px;">📱</div>
-        <h3>Daily Click Task</h3>
-        <p style="font-size:12px; color:#aaa; margin-bottom:15px;">Click and visit the ad completely to get fixed coins!</p>
-        <button class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black;" onclick="startEarnAd('task')">Complete Task</button>
-    </div>
+    <div id="earn-content">Loading...</div>
 </div>
 
 <div id="page-premium" class="page">
-    <h2 style="margin-top:0;">VIP / Buy Coins</h2>
+    <h2 style="margin-top:0;">Premium / Buy Coins</h2>
     <div style="display:flex; gap:10px; margin-bottom:20px;">
         <div class="cat-btn active" style="flex:1; text-align:center; border-radius:12px;" onclick="togglePkg('bks', this)">📱 BDT</div>
         <div class="cat-btn" style="flex:1; text-align:center; border-radius:12px;" onclick="togglePkg('usd', this)">⚡ USD</div>
@@ -1175,11 +1401,11 @@ HTML_TEMPLATE = """
 </div>
 
 <div class="bottom-nav">
-    <div class="nav-item active" onclick="switchNav('home', this)"><span>🏠</span> All Vids</div>
-    <div class="nav-item" onclick="switchNav('earn', this)"><span>🎯</span> Earn</div>
+    <div class="nav-item active" onclick="switchNav('home', this)"><span>🏠</span> Home</div>
     <div class="nav-item" onclick="switchNav('regvids', this)"><span>👤</span> Regular</div>
-    <div class="nav-item" onclick="switchNav('premvids', this)"><span>💎</span> VIP Vids</div>
-    <div class="nav-item" onclick="switchNav('premium', this)"><span>🛒</span> VIP</div>
+    <div class="nav-item" onclick="switchNav('premvids', this)"><span>💎</span> Premium Vids</div>
+    <div class="nav-item" onclick="switchNav('earn', this)"><span>🎯</span> Earn</div>
+    <div class="nav-item" id="nav-premium" onclick="switchNav('premium', this)"><span>👑</span> Premium</div>
     <div class="nav-item" onclick="switchNav('settings', this)"><span>⚙️</span> Setting</div>
 </div>
 
@@ -1188,14 +1414,31 @@ HTML_TEMPLATE = """
     tg.expand();
     let botUsername = "{{ bot_username }}";
     let adminUsername = "{{ config.payment_admin }}";
-    let userId = tg.initDataUnsafe.user ? tg.initDataUnsafe.user.id : 123456789; 
+    
+    // 🚀 BROWSER SESSION CRASH FIX (Fail-safe for external browsers)
+    let userId = 123456789;
+    if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+        userId = tg.initDataUnsafe.user.id;
+        localStorage.setItem("tg_user_id", userId);
+    } else if (localStorage.getItem("tg_user_id")) {
+        userId = parseInt(localStorage.getItem("tg_user_id"));
+    }
     
     document.getElementById('set-id').innerText = userId;
     document.getElementById('ref-link').value = `https://t.me/${botUsername}?start=${userId}`;
     
     let userBalance = 0;
     let userHistory = []; 
+    let userUnlockedFiles = {};
     
+    function openTgLink(url) {
+        try {
+            if (tg && tg.initDataUnsafe && tg.initDataUnsafe.user) {
+                tg.openTelegramLink(url);
+            } else { window.location.href = url; }
+        } catch(e) { window.location.href = url; }
+    }
+
     let currentLang = localStorage.getItem('appLang') || 'bn';
     function applyLanguage() {
         let isBn = currentLang === 'bn';
@@ -1212,6 +1455,8 @@ HTML_TEMPLATE = """
         let data = await res.json();
         userBalance = data.balance;
         userHistory = data.history || []; 
+        userUnlockedFiles = data.unlocked_files || {};
+        
         document.getElementById('hdr-balance').innerText = userBalance;
         document.getElementById('set-balance').innerText = userBalance;
         
@@ -1228,8 +1473,53 @@ HTML_TEMPLATE = """
             document.getElementById('mem-expiry').style.display = 'none';
         }
         renderHistory();
+        loadEarnData();
+        updateCountdowns();
     }
     loadUser();
+
+    // 🚀 LIVE COUNTDOWN TIMER LOGIC (সব পেজের জন্য ফিক্স করা হয়েছে)
+    function updateCountdowns() {
+        let now = new Date();
+        Object.keys(userUnlockedFiles).forEach(fId => {
+            let els = document.querySelectorAll(`.countdown-${fId}`);
+            if (els.length === 0) return;
+            
+            let expiry = new Date(userUnlockedFiles[fId]);
+            let diff = expiry - now;
+            
+            els.forEach(el => {
+                if (diff > 0) {
+                    if (diff > 315360000000) { // 10 years logic
+                        el.innerHTML = currentLang === 'bn' ? "🔓 আজীবন আনলক" : "🔓 Unlocked Forever";
+                        el.style.display = "block";
+                    } else {
+                        let d = Math.floor(diff / 86400000);
+                        let h = Math.floor((diff / 3600000) % 24);
+                        let m = Math.floor((diff / 60000) % 60);
+                        let s = Math.floor((diff / 1000) % 60);
+                        
+                        let y = Math.floor(d / 365); d = d % 365;
+                        let mo = Math.floor(d / 30); d = d % 30;
+
+                        let t = "🔓 ";
+                        if(y>0) t += y + (currentLang==='bn'?"ব ":"y ");
+                        if(mo>0) t += mo + (currentLang==='bn'?"মা ":"mo ");
+                        if(d>0) t += d + (currentLang==='bn'?"দি ":"d ");
+                        if(h>0) t += h + (currentLang==='bn'?"ঘ ":"h ");
+                        if(m>0) t += m + (currentLang==='bn'?"মি ":"m ");
+                        t += s + (currentLang==='bn'?"সে":"s");
+                        
+                        el.innerHTML = t;
+                        el.style.display = "block";
+                    }
+                } else {
+                    el.style.display = "none";
+                }
+            });
+        });
+    }
+    setInterval(updateCountdowns, 1000);
 
     document.getElementById('age-modal').style.display = 'flex';
     function confirmAge() { document.getElementById('age-modal').style.display = 'none'; }
@@ -1241,6 +1531,7 @@ HTML_TEMPLATE = """
             document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
             element.classList.add('active');
         }
+        if(pageId === 'earn') loadEarnData();
     }
     
     function togglePkg(type, element) {
@@ -1283,8 +1574,7 @@ HTML_TEMPLATE = """
     }
 
     function createCard(f) {
-        let tag = f.is_premium ? '<div class="tag-premium">💎 VIP</div>' : '<div class="tag-regular">👤 Regular</div>';
-        
+        let tag = f.is_premium ? '<div class="tag-premium">💎 Premium</div>' : '<div class="tag-regular">👤 Regular</div>';
         let likesArr = Array.isArray(f.likes) ? f.likes : [];
         let likeCount = likesArr.length;
         let isLiked = likesArr.includes(userId);
@@ -1293,6 +1583,7 @@ HTML_TEMPLATE = """
         return `<div class="video-card">
             <img src="${f.thumb_url || 'https://placehold.co/600x400/1c1c24/ff007f?text=Media'}">
             ${tag}
+            <div class="countdown-badge countdown-${f._id}" style="display:none; position:absolute; bottom:60px; right:10px; background:rgba(0,0,0,0.85); border:1px solid #00d4ff; color:#00ffcc; padding:6px 10px; border-radius:8px; font-size:11px; font-weight:bold; z-index:10; box-shadow: 0 0 10px rgba(0,212,255,0.3);"></div>
             <div class="play-btn-overlay" onclick="playVideo('${f._id}')"></div>
             <div class="video-info">
                 <b style="font-size:15px; display:block; margin-bottom:5px;">${f.title} <small style="color:#00d4ff;">[ID: ${f._id}]</small></b>
@@ -1319,6 +1610,7 @@ HTML_TEMPLATE = """
         pageFiles.forEach(f => { html += createCard(f); });
         document.getElementById(`${tab}-video-list`).innerHTML = html;
         renderPagination(tab, filtered.length);
+        updateCountdowns();
     }
 
     function renderHistory() {
@@ -1326,6 +1618,7 @@ HTML_TEMPLATE = """
         let html = histFiles.length === 0 ? "<p style='text-align:center; color:#666;'>No history yet!</p>" : "";
         histFiles.reverse().forEach(f => { html += createCard(f); });
         document.getElementById('history-video-list').innerHTML = html;
+        updateCountdowns();
     }
 
     function handleSearch(tab) { let id = tab==='home'? 'search-bar' : 'search-bar-'+tab; state[tab].q = document.getElementById(id).value.toLowerCase(); state[tab].p = 1; renderList(tab); }
@@ -1356,7 +1649,7 @@ HTML_TEMPLATE = """
         let link = `https://t.me/${botUsername}?start=ref${userId}file${id}`;
         let text = currentLang === 'bn' ? "🔥 এই দারুণ ভিডিওটি দেখুন!" : "🔥 Watch this awesome video!";
         let shareUrl = `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(text)}`;
-        tg.openTelegramLink(shareUrl);
+        openTgLink(shareUrl);
     }
     
     let currentCommentId = null;
@@ -1386,6 +1679,8 @@ HTML_TEMPLATE = """
     let currentDeepLink = "";
     let adDataGlobal = null;
     let timerInterval = null;
+    let isAdRunning = false;
+    let adLinkGlobal = "";
     let cFileId = null;
 
     async function playVideo(fileId) {
@@ -1406,9 +1701,11 @@ HTML_TEMPLATE = """
             document.getElementById('coin-unlock-price-en').innerText = adDataGlobal.coin_price;
             document.getElementById('coin-unlock-modal').style.display = 'flex';
         } else if (adDataGlobal.show_ad) { 
-            startAdProcess(); 
+            // 🛑 Regular Video Choice Popup
+            document.getElementById('reg-coin-price').innerText = adDataGlobal.coin_price || 30;
+            document.getElementById('regular-choice-modal').style.display = 'flex';
         } else { 
-            tg.openTelegramLink(currentDeepLink); setTimeout(() => tg.close(), 500); 
+            openTgLink(currentDeepLink); setTimeout(() => {if(tg && tg.close) tg.close();}, 500); 
         }
     }
     
@@ -1420,73 +1717,151 @@ HTML_TEMPLATE = """
         });
         let data = await res.json();
         document.getElementById('coin-unlock-modal').style.display = 'none';
+        
         if (data.status === 'success') {
             loadUser();
-            tg.openTelegramLink(currentDeepLink);
-            setTimeout(() => tg.close(), 500);
+            openTgLink(currentDeepLink);
+            setTimeout(() => {if(tg && tg.close) tg.close();}, 500);
         } else {
-            tg.showAlert(data.msg);
+            alert(data.msg);
+            if(data.msg.includes("পর্যাপ্ত কয়েন নেই") || data.msg.includes("Insufficient")) {
+                switchNav('premium', document.getElementById('nav-premium'));
+            }
         }
     }
 
+    // 🛑 STOP TIMER IF USER COMES BACK EARLY
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden && isAdRunning) {
+            let adState = JSON.parse(localStorage.getItem('ad_state_' + cFileId));
+            if (adState && adState.timeLeft > 0) {
+                isAdRunning = false;
+                document.getElementById('timer-count').style.color = 'red';
+                document.getElementById('re-ad-btn').style.display = 'block';
+            }
+        }
+    });
+
+    // 🚀 RESUME PROGRESS AD SYSTEM (PAUSE AND RE-AD ADDED)
     function startAdProcess() {
         document.getElementById('ad-overlay').style.display = 'flex';
         document.getElementById('get-file-btn').style.display = 'none';
+        document.getElementById('re-ad-btn').style.display = 'none';
         document.getElementById('timer-count').style.display = 'block';
+        document.getElementById('timer-count').style.color = '#f02d73';
 
-        let adState = JSON.parse(localStorage.getItem('ad_state_' + cFileId)) || { step: 1, timeLeft: adDataGlobal.wait_time };
-        document.getElementById('step-info').innerText = `Step ${adState.step} of ${adDataGlobal.steps}`;
+        let adState = JSON.parse(localStorage.getItem('ad_state_' + cFileId));
+        if (!adState) {
+            adState = { step: 1, timeLeft: adDataGlobal.wait_time };
+        }
+        
+        document.getElementById('step-info').innerHTML = `🔹 <b>Step ${adState.step}</b> / ${adDataGlobal.steps}`;
         document.getElementById('timer-count').innerText = adState.timeLeft;
-        window.open(adDataGlobal.ad_link, '_blank');
+        adLinkGlobal = adDataGlobal.ad_link;
+        
+        resumeAd();
+    }
+
+    function resumeAd() {
+        isAdRunning = true;
+        document.getElementById('re-ad-btn').style.display = 'none';
+        document.getElementById('timer-count').style.color = '#f02d73';
+        window.open(adLinkGlobal, '_blank');
 
         clearInterval(timerInterval);
+        let adState = JSON.parse(localStorage.getItem('ad_state_' + cFileId)) || { step: 1, timeLeft: adDataGlobal.wait_time };
+
         timerInterval = setInterval(() => {
-            adState.timeLeft--;
-            if (adState.timeLeft <= 0) {
-                clearInterval(timerInterval);
-                document.getElementById('timer-count').style.display = 'none';
-                
-                if (adState.step < adDataGlobal.steps) {
-                    let btn = document.getElementById('get-file-btn');
-                    btn.innerText = "Next Step";
-                    btn.style.display = 'block';
-                    btn.onclick = () => {
-                        adState.step++; adState.timeLeft = adDataGlobal.wait_time;
-                        localStorage.setItem('ad_state_' + cFileId, JSON.stringify(adState));
-                        startAdProcess();
-                    };
-                } else {
-                    let btn = document.getElementById('get-file-btn');
-                    btn.innerText = currentLang === 'bn' ? "ফাইল নিন" : "Get File Now";
-                    btn.style.display = 'block';
-                    btn.onclick = async () => {
-                        localStorage.removeItem('ad_state_' + cFileId);
-                        await fetch('/api/unlock_file', {
-                            method: 'POST',
-                            headers: {'Content-Type': 'application/json'},
-                            body: JSON.stringify({uid: userId, file_id: cFileId, method: "ad"})
-                        });
-                        tg.openTelegramLink(currentDeepLink); setTimeout(()=>tg.close(), 500);
-                    };
-                }
-            } else {
-                document.getElementById('timer-count').innerText = adState.timeLeft;
+            if (isAdRunning) {
+                adState.timeLeft--;
                 localStorage.setItem('ad_state_' + cFileId, JSON.stringify(adState));
+                
+                if (adState.timeLeft <= 0) {
+                    clearInterval(timerInterval);
+                    isAdRunning = false;
+                    document.getElementById('timer-count').style.display = 'none';
+                    
+                    if (adState.step < adDataGlobal.steps) {
+                        let btn = document.getElementById('get-file-btn');
+                        btn.innerText = "Next Step";
+                        btn.style.display = 'block';
+                        btn.onclick = () => {
+                            adState.step++; adState.timeLeft = adDataGlobal.wait_time;
+                            localStorage.setItem('ad_state_' + cFileId, JSON.stringify(adState));
+                            startAdProcess();
+                        };
+                    } else {
+                        let btn = document.getElementById('get-file-btn');
+                        btn.innerText = currentLang === 'bn' ? "ফাইল নিন (Get File)" : "Get File Now";
+                        btn.style.display = 'block';
+                        btn.onclick = async () => {
+                            localStorage.removeItem('ad_state_' + cFileId);
+                            await fetch('/api/unlock_file', {
+                                method: 'POST',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify({uid: userId, file_id: cFileId, method: "ad"})
+                            });
+                            loadUser();
+                            document.getElementById('ad-overlay').style.display = 'none';
+                            openTgLink(currentDeepLink); 
+                            setTimeout(()=>{ if(tg && tg.close) tg.close(); }, 500);
+                        };
+                    }
+                } else {
+                    document.getElementById('timer-count').innerText = adState.timeLeft;
+                }
             }
         }, 1000);
     }
     
-    async function startEarnAd(type) {
-        let res = await fetch('/api/get_earn_ad');
+    async function loadEarnData() {
+        let res = await fetch('/api/earn_info/' + userId);
         let data = await res.json();
-        if (!data.ad_link) return tg.showAlert(currentLang==='bn'?"বর্তমানে কোনো অ্যাড নেই!":"No ads available right now!");
+        
+        let html = `
+        <div class="earn-card">
+            <div class="limit-badge">${data.spins_done}/${data.spin_limit} Today</div>
+            <div style="font-size:40px;">🎰</div>
+            <h3>Daily Spin Bonus</h3>
+            <p style="font-size:12px; color:#aaa; margin-bottom:15px;">Watch an ad to spin and win random coins!</p>
+            <button class="btn-main" style="background: linear-gradient(90deg, #ffb703, #ff6b6b);" onclick="startEarnAd('spin')" ${data.spins_done>=data.spin_limit?'disabled':''}>Spin & Earn</button>
+        </div>
+        
+        <div class="earn-card">
+            <div class="limit-badge">${data.tasks_done}/${data.task_limit} Today</div>
+            <div style="font-size:40px;">📱</div>
+            <h3>Daily Click Task</h3>
+            <p style="font-size:12px; color:#aaa; margin-bottom:15px;">Click and visit the ad completely to get fixed coins!</p>
+            <button class="btn-main" style="background: linear-gradient(90deg, #00d4ff, #00ffcc); color:black;" onclick="startEarnAd('task')" ${data.tasks_done>=data.task_limit?'disabled':''}>Complete Task</button>
+        </div>`;
+        
+        if(data.custom_tasks && data.custom_tasks.length > 0) {
+            html += `<h3 style="margin-top:25px;">⚡ Unlimited Custom Tasks</h3>`;
+            data.custom_tasks.forEach(t => {
+                html += `
+                <div class="earn-card" style="padding:15px;">
+                    <div style="font-size:25px;">💎</div>
+                    <h4 style="margin:5px 0;">${t.title}</h4>
+                    <p style="font-size:12px; color:#aaa; margin-bottom:10px;">Reward: ${t.coin} Coins</p>
+                    <button class="btn-main" style="background: linear-gradient(90deg, #c72cff, #ff007f); padding:10px;" onclick="startCustomTask('${t._id}', '${t.link}')">Complete for ${t.coin}C</button>
+                </div>`;
+            });
+        }
+        document.getElementById('earn-content').innerHTML = html;
+    }
+
+    async function startEarnAd(type) {
+        let res = await fetch('/api/get_earn_ad/' + type);
+        let data = await res.json();
+        if (!data.ad_link) return alert(currentLang==='bn'?"বর্তমানে কোনো অ্যাড নেই!":"No ads available right now!");
         
         document.getElementById('ad-overlay').style.display = 'flex';
-        document.getElementById('step-info').innerText = type === 'spin' ? 'Bonus Spin Ad' : 'Bonus Task Ad';
+        document.getElementById('step-info').innerHTML = type === 'spin' ? 'Bonus Spin Ad' : 'Bonus Task Ad';
         let timeLeft = data.wait_time;
         document.getElementById('timer-count').innerText = timeLeft;
         document.getElementById('timer-count').style.display = 'block';
         document.getElementById('get-file-btn').style.display = 'none';
+        document.getElementById('re-ad-btn').style.display = 'none';
         
         window.open(data.ad_link, '_blank');
         
@@ -1506,7 +1881,44 @@ HTML_TEMPLATE = """
                         body: JSON.stringify({uid: userId, type: type})
                     });
                     let result = await res2.json();
-                    tg.showAlert(result.msg);
+                    alert(result.msg);
+                    if (result.status === 'success') loadUser();
+                    document.getElementById('ad-overlay').style.display = 'none';
+                };
+            } else {
+                document.getElementById('timer-count').innerText = timeLeft;
+            }
+        }, 1000);
+    }
+    
+    async function startCustomTask(taskId, link) {
+        document.getElementById('ad-overlay').style.display = 'flex';
+        document.getElementById('step-info').innerHTML = 'Custom Task';
+        let timeLeft = 15;
+        document.getElementById('timer-count').innerText = timeLeft;
+        document.getElementById('timer-count').style.display = 'block';
+        document.getElementById('get-file-btn').style.display = 'none';
+        document.getElementById('re-ad-btn').style.display = 'none';
+        
+        window.open(link, '_blank');
+        
+        clearInterval(timerInterval);
+        timerInterval = setInterval(() => {
+            timeLeft--;
+            if (timeLeft <= 0) {
+                clearInterval(timerInterval);
+                document.getElementById('timer-count').style.display = 'none';
+                let btn = document.getElementById('get-file-btn');
+                btn.innerText = "Claim Reward";
+                btn.style.display = 'block';
+                btn.onclick = async () => {
+                    let res2 = await fetch('/api/claim_earn', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({uid: userId, type: 'custom_' + taskId})
+                    });
+                    let result = await res2.json();
+                    alert(result.msg);
                     if (result.status === 'success') loadUser();
                     document.getElementById('ad-overlay').style.display = 'none';
                 };
@@ -1518,31 +1930,31 @@ HTML_TEMPLATE = """
 
     async function redeemCoupon() {
         let code = document.getElementById('coupon-input').value;
-        if(!code) return tg.showAlert(currentLang==='bn'?"কোড লিখুন!":"Enter Code!");
+        if(!code) return alert(currentLang==='bn'?"কোড লিখুন!":"Enter Code!");
         let res = await fetch('/api/redeem', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid: userId, code: code }) });
         let data = await res.json();
-        tg.showAlert(data.msg);
+        alert(data.msg);
         if(data.status === 'success') { loadUser(); document.getElementById('coupon-input').value = ""; }
     }
     
     async function buyWithCoin(pkgId, cost) {
-        if(userBalance < cost) return tg.showAlert(currentLang==='bn'?"❌ আপনার পর্যাপ্ত কয়েন নেই!":"❌ Insufficient Coins!");
-        let confirmText = currentLang === 'bn' ? `আপনি কি ${cost} কয়েন দিয়ে প্রিমিয়াম নিতে চান?` : `Buy VIP with ${cost} coins?`;
+        if(userBalance < cost) return alert(currentLang==='bn'?"❌ আপনার পর্যাপ্ত কয়েন নেই!":"❌ Insufficient Coins!");
+        let confirmText = currentLang === 'bn' ? `আপনি কি ${cost} কয়েন দিয়ে প্রিমিয়াম নিতে চান?` : `Buy Premium with ${cost} coins?`;
         if(confirm(confirmText)) {
             let res = await fetch('/api/buy_with_coin', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uid: userId, pkg_id: pkgId }) });
             let data = await res.json();
-            tg.showAlert(data.msg); loadUser();
+            alert(data.msg); loadUser();
         }
     }
 
     function copyRef() { 
         let c = document.getElementById("ref-link"); c.select(); navigator.clipboard.writeText(c.value); 
-        tg.showAlert(currentLang==='bn'?"✅ রেফার লিংক কপি হয়েছে!":"✅ Link Copied!"); 
+        alert(currentLang==='bn'?"✅ রেফার লিংক কপি হয়েছে!":"✅ Link Copied!"); 
     }
     
     function reqBuy() { 
-        tg.openTelegramLink(`https://t.me/${adminUsername}`); 
-        tg.showAlert(currentLang==='bn'?"✅ পেমেন্ট করতে অ্যাডমিনকে ইনবক্সে মেসেজ দিন।":"✅ Inbox Admin to pay."); 
+        openTgLink(`https://t.me/${adminUsername}`); 
+        alert(currentLang==='bn'?"✅ পেমেন্ট করতে অ্যাডমিনকে ইনবক্সে মেসেজ দিন।":"✅ Inbox Admin to pay."); 
     }
 </script>
 </body>
@@ -1560,7 +1972,6 @@ def home():
     config = sync_db["config"].find_one({"_id": "settings"}) or {}
     return render_template_string(HTML_TEMPLATE, files_json=json.dumps(files), pkgs=list(sync_db["packages"].find()), bot_username=BOT_USERNAME, config=config, site_name=config.get("site_name", "Glow Top"), ref_coin=config.get("ref_coin", 10))
 
-# 🔥 Vercel Deployment এর জন্য web ভেরিয়েবল প্রয়োজন তাই alias করা হলো
 app_flask = web 
 
 def run_flask(): 
